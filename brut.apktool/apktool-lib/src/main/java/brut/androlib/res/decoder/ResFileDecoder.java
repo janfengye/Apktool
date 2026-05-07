@@ -20,7 +20,10 @@ import brut.androlib.exceptions.AndrolibException;
 import brut.androlib.exceptions.NinePatchNotFoundException;
 import brut.androlib.exceptions.RawXmlEncounteredException;
 import brut.androlib.res.table.ResEntry;
-import brut.androlib.res.table.value.*;
+import brut.androlib.res.table.value.ResFileReference;
+import brut.androlib.res.table.value.ResPrimitive;
+import brut.androlib.res.table.value.ResString;
+import brut.common.Log;
 import brut.directory.Directory;
 import brut.directory.DirectoryException;
 import org.apache.commons.io.FilenameUtils;
@@ -29,10 +32,9 @@ import java.io.InputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Map;
-import java.util.logging.Logger;
 
 public class ResFileDecoder {
-    private static final Logger LOGGER = Logger.getLogger(ResFileDecoder.class.getName());
+    private static final String TAG = ResFileDecoder.class.getName();
 
     public enum Type { UNKNOWN, BINARY_XML, PNG_9PATCH }
 
@@ -42,30 +44,23 @@ public class ResFileDecoder {
         mDecoders = decoders;
     }
 
-    public void decode(ResEntry entry, Directory inDir, Directory outDir, Map<String, String> resFileMapping)
-            throws AndrolibException {
+    public void decode(ResEntry entry, Directory inDir, Directory outDir, Map<String, String> resFileMap) {
         String inFileName = ((ResFileReference) entry.getValue()).getPath();
 
         // Some apps have string values where they shouldn't be.
-        // We assumed that they are file references, but if no such file then
-        // fall back to a string value.
+        // We assumed that they are file references, but if no such file then fall back to a string value.
         if (!inDir.containsFile(inFileName)) {
             entry.setValue(new ResString(inFileName));
             return;
         }
 
         // Get input file extension.
-        String ext;
-        if (inFileName.endsWith(".9.png")) {
-            ext = "9.png";
-        } else {
-            ext = FilenameUtils.getExtension(inFileName).toLowerCase();
-        }
+        String ext = inFileName.endsWith(".9.png") ? "9.png" : FilenameUtils.getExtension(inFileName).toLowerCase();
 
         // Use aapt2-like logic to determine which decoder to use.
         // TODO: Determine by magic bytes and fill in stripped extensions?
         Type type = Type.UNKNOWN;
-        if (!ext.isEmpty() && !entry.getTypeName().equals("raw")) {
+        if (!ext.isEmpty() && !entry.getType().getName().equals("raw")) {
             switch (ext) {
                 case "xml":
                 case "xsd":
@@ -78,13 +73,13 @@ public class ResFileDecoder {
         }
 
         // Generate output file name from entry.
-        String outFileName = "res/" + entry.getTypeName() + entry.getConfig().getQualifiers()
-                + "/" + entry.getName() + (ext.isEmpty() ? "" : "." + ext);
+        String outFileName = "res/" + entry.getType().getName() + entry.getType().getConfig().toQualifiers()
+                           + "/" + entry.getName() + (ext.isEmpty() ? "" : "." + ext);
 
         // Map input file name to output file name.
-        resFileMapping.put(inFileName, outFileName);
+        resFileMap.put(inFileName, outFileName);
 
-        LOGGER.fine("Decoding file " + inFileName + " to " + outFileName);
+        Log.d(TAG, "Decoding file " + inFileName + " to " + outFileName);
 
         try {
             if (type != Type.UNKNOWN) {
@@ -93,19 +88,19 @@ public class ResFileDecoder {
                     return;
                 } catch (RawXmlEncounteredException ignored) {
                     // Assume the file is a raw XML.
-                    LOGGER.fine("Could not decode binary XML file: " + inFileName);
+                    Log.d(TAG, "Could not decode binary XML file: " + inFileName);
                 } catch (NinePatchNotFoundException ignored) {
                     // Assume the file is a raw PNG.
                     // Some apps contain unprocessed dummy 3x3 9-patch PNGs.
                     // Extract them as-is, let aapt2 process them properly later.
-                    LOGGER.fine("Could not find 9-patch chunk in file: " + inFileName);
+                    Log.d(TAG, "Could not find 9-patch chunk in file: " + inFileName);
                 }
             }
 
             decode(Type.UNKNOWN, inDir, inFileName, outDir, outFileName);
         } catch (AndrolibException ignored) {
-            LOGGER.warning("Could not decode file, replacing by FALSE value: " + inFileName);
-            entry.setValue(ResPrimitive.FALSE);
+            Log.w(TAG, "Could not decode file, replacing by NULL value: " + inFileName);
+            entry.setValue(ResPrimitive.NULL);
         }
     }
 

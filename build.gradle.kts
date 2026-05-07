@@ -1,6 +1,6 @@
 import java.io.ByteArrayOutputStream
 
-val version = "3.0.0"
+val version = "3.0.3"
 val suffix = "SNAPSHOT"
 
 // Strings embedded into the build.
@@ -11,33 +11,29 @@ defaultTasks("build", "shadowJar", "proguard")
 
 // Functions
 val gitDescribe: String? by lazy {
-    val stdout = ByteArrayOutputStream()
     try {
-        rootProject.exec {
+        val result = providers.exec {
             commandLine("git", "describe", "--tags")
-            standardOutput = stdout
         }
-        stdout.toString().trim().replace("-g", "-")
+        result.standardOutput.asText.get().trim().replace("-g", "-")
     } catch (e: Exception) {
         null
     }
 }
 
 val gitBranch: String? by lazy {
-    val stdout = ByteArrayOutputStream()
     try {
-        rootProject.exec {
+        val result = providers.exec {
             commandLine("git", "rev-parse", "--abbrev-ref", "HEAD")
-            standardOutput = stdout
         }
-        stdout.toString().trim()
+        result.standardOutput.asText.get().trim()
     } catch (e: Exception) {
         null
     }
 }
 
 if ("release" !in gradle.startParameter.taskNames) {
-    val hash = this.gitDescribe
+    val hash = gitDescribe
 
     if (hash == null) {
         gitRevision = "dirty"
@@ -56,8 +52,9 @@ if ("release" !in gradle.startParameter.taskNames) {
 
 plugins {
     `java-library`
-    `maven-publish`
-    signing
+    if (JavaVersion.current().isJava11Compatible) {
+        alias(libs.plugins.vanniktech.maven.publish) apply false
+    }
 }
 
 allprojects {
@@ -89,80 +86,12 @@ subprojects {
         "apktool-lib", "apktool-cli"
     )
 
-    if (project.name in mavenProjects) {
-        apply(plugin = "maven-publish")
-        apply(plugin = "signing")
-
-        java {
-            withJavadocJar()
-            withSourcesJar()
-        }
-
-        publishing {
-            repositories {
-                maven {
-                    url = if (suffix.contains("SNAPSHOT")) {
-                        uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
-                    } else {
-                        uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
-                    }
-                    credentials {
-                        username = (project.properties["ossrhUsername"] ?: "").toString()
-                        password = (project.properties["ossrhPassword"] ?: "").toString()
-                    }
-                }
-            }
-            publications {
-                register("mavenJava", MavenPublication::class) {
-                    from(components["java"])
-                    groupId = "org.apktool"
-                    artifactId = project.name
-                    version = apktoolVersion
-
-                    pom {
-                        name = "Apktool"
-                        description = "A tool for reverse engineering Android apk files."
-                        url = "https://apktool.org"
-
-                        licenses {
-                            license {
-                                name = "The Apache License 2.0"
-                                url = "https://opensource.org/licenses/Apache-2.0"
-                            }
-                        }
-                        developers {
-                            developer {
-                                id = "iBotPeaches"
-                                name = "Connor Tumbleson"
-                                email = "connor.tumbleson@gmail.com"
-                            }
-                            developer {
-                                id = "brutall"
-                                name = "Ryszard Wiśniewski"
-                                email = "brut.alll@gmail.com"
-                            }
-                        }
-                        scm {
-                            connection = "scm:git:git://github.com/iBotPeaches/Apktool.git"
-                            developerConnection = "scm:git:git@github.com:iBotPeaches/Apktool.git"
-                            url = "https://github.com/iBotPeaches/Apktool"
-                        }
-                    }
-                }
-            }
-        }
-
-        tasks.withType<Javadoc>() {
-            (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:none", "-quiet")
-        }
-
-        signing {
-            sign(publishing.publications["mavenJava"])
-        }
+    if (project.name in mavenProjects && JavaVersion.current().isJava11Compatible) {
+        apply(from = "${rootProject.projectDir}/gradle/scripts/publishing.gradle")
     }
 }
 
-task("release") {
+tasks.register("release") {
     // Used for official releases.
 }
 

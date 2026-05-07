@@ -34,8 +34,7 @@ public final class XmlPullUtils {
         // Private constructor for utility class.
     }
 
-    public static void copy(XmlPullParser in, XmlSerializer out)
-            throws XmlPullParserException, IOException {
+    public static void copy(XmlPullParser in, XmlSerializer out) throws XmlPullParserException, IOException {
         copy(in, out, null);
     }
 
@@ -43,8 +42,8 @@ public final class XmlPullUtils {
             throws XmlPullParserException, IOException {
         Boolean standalone = (Boolean) in.getProperty(PROPERTY_XMLDECL_STANDALONE);
 
-        // Some parsers may have already consumed the event that starts the
-        // document, so we manually emit that event here for consistency.
+        // Some parsers may have already consumed the event that starts the document, so we manually emit that
+        // event here for consistency.
         if (in.getEventType() == XmlPullParser.START_DOCUMENT) {
             out.startDocument(in.getInputEncoding(), standalone);
         }
@@ -54,13 +53,13 @@ public final class XmlPullUtils {
             if (event == -1) {
                 break;
             }
-            if (event == XmlPullParser.START_DOCUMENT) {
-                out.startDocument(in.getInputEncoding(), standalone);
-                continue;
-            }
             if (event == XmlPullParser.END_DOCUMENT) {
                 out.endDocument();
                 break;
+            }
+            if (event == XmlPullParser.START_DOCUMENT) {
+                out.startDocument(in.getInputEncoding(), standalone);
+                continue;
             }
             if (handler != null && handler.onEvent(in, out)) {
                 continue;
@@ -115,15 +114,10 @@ public final class XmlPullUtils {
     }
 
     /**
-     * Some parsers may return an empty string when a namespace in unsupported,
-     * which can confuse serializers. This method normalizes empty strings to
-     * be null.
+     * Some parsers may return an empty string when a namespace in unsupported, which can confuse serializers.
+     * This method normalizes empty strings to be null.
      */
     private static String normalizeNamespace(String namespace) {
-        if (namespace == null || namespace.isEmpty()) {
-            return null;
-        } else {
-            return namespace;
-        }
+        return (namespace != null && !namespace.isEmpty()) ? namespace : null;
     }
 }

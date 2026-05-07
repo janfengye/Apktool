@@ -17,89 +17,134 @@
 package brut.androlib.smali;
 
 import brut.androlib.exceptions.AndrolibException;
+import brut.util.OS;
 import com.android.tools.smali.baksmali.Baksmali;
 import com.android.tools.smali.baksmali.BaksmaliOptions;
-import com.android.tools.smali.dexlib2.DexFileFactory;
-import com.android.tools.smali.dexlib2.Opcodes;
 import com.android.tools.smali.dexlib2.analysis.InlineMethodResolver;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedOdexFile;
-import com.android.tools.smali.dexlib2.iface.DexFile;
-import com.android.tools.smali.dexlib2.iface.MultiDexContainer;
+import com.android.tools.smali.dexlib2.dexbacked.ZipDexContainer;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class SmaliDecoder {
-    private final File mApkFile;
-    private final String mDexName;
-    private final boolean mBakDeb;
-    private int mInferredApiLevel;
+    private final ZipDexContainer mDexContainer;
+    private final boolean mDebugMode;
+    private final Set<String> mDexFiles;
+    private final AtomicInteger mInferredApiLevel;
 
-    public SmaliDecoder(File apkFile, String dexName, boolean bakDeb) {
-        mApkFile = apkFile;
-        mDexName = dexName;
-        mBakDeb = bakDeb;
+    public SmaliDecoder(File apkFile, boolean debugMode) throws AndrolibException {
+        mDexContainer = new ZipDexContainer(apkFile, null);
+        // ZipDexContainer is lazily initialized and not thread-safe. Eagerly initialize on the constructing thread.
+        try {
+            mDexContainer.getEntry("");
+        } catch (IOException ex) {
+            throw new AndrolibException("Could not open apk file: " + apkFile, ex);
+        }
+        mDebugMode = debugMode;
+        mDexFiles = ConcurrentHashMap.newKeySet();
+        mInferredApiLevel = new AtomicInteger();
+    }
+
+    public Set<String> getDexFiles() {
+        return mDexFiles;
     }
 
     public int getInferredApiLevel() {
-        return mInferredApiLevel;
+        return mInferredApiLevel.get();
     }
 
-    public void decode(File outDir) throws AndrolibException {
+    public void decode(String dexName, File outDir) throws AndrolibException {
         try {
-            BaksmaliOptions options = new BaksmaliOptions();
-            options.deodex = false;
-            options.implicitReferences = false;
-            options.parameterRegisters = true;
-            options.localsDirective = true;
-            options.sequentialLabels = true;
-            options.debugInfo = mBakDeb;
-            options.codeOffsets = false;
-            options.accessorComments = false;
-            options.registerInfo = 0;
-            options.inlineResolver = null;
-
-            // Set jobs automatically.
-            int jobs = Runtime.getRuntime().availableProcessors();
-            if (jobs > 6) {
-                jobs = 6;
-            }
-
-            // Create the container.
-            MultiDexContainer<? extends DexBackedDexFile> container =
-                DexFileFactory.loadDexContainer(mApkFile, null);
-            MultiDexContainer.DexEntry<? extends DexBackedDexFile> dexEntry;
-            DexBackedDexFile dexFile;
-
-            // If we have 1 item, ignore the passed file. Pull the DexFile we need.
-            if (container.getDexEntryNames().size() == 1) {
-                dexEntry = container.getEntry(container.getDexEntryNames().get(0));
-            } else {
-                dexEntry = container.getEntry(mDexName);
-            }
-
-            // Double-check the passed param exists.
+            // Fetch the requested dex file from the dex container.
+            ZipDexContainer.DexEntry<DexBackedDexFile> dexEntry = mDexContainer.getEntry(dexName);
             if (dexEntry == null) {
-                dexEntry = container.getEntry(container.getDexEntryNames().get(0));
+                throw new AndrolibException("Could not find file: " + dexName);
             }
 
-            assert dexEntry != null;
-            dexFile = dexEntry.getDexFile();
+            // Add the requested dex file.
+            Map<Integer, DexBackedDexFile> dexFiles = new TreeMap<>();
+            dexFiles.put(1, dexEntry.getDexFile());
 
-            if (dexFile.supportsOptimizedOpcodes()) {
-                throw new AndrolibException("Could not disassemble an odex file without deodexing it.");
+            // Add additional dex files if it's a multi-dex container.
+            for (String dexEntryName : mDexContainer.getDexEntryNames()) {
+                if (dexEntryName.equals(dexName)) {
+                    continue;
+                }
+
+                String prefix = dexName + "/";
+                if (!dexEntryName.startsWith(prefix)) {
+                    continue;
+                }
+
+                int dexNum;
+                try {
+                    dexNum = Integer.parseInt(dexEntryName.substring(prefix.length()));
+                } catch (NumberFormatException ignored) {
+                    continue;
+                }
+                if (dexNum > 1) {
+                    dexFiles.put(dexNum, mDexContainer.getEntry(dexEntryName).getDexFile());
+                }
             }
 
-            if (dexFile instanceof DexBackedOdexFile) {
-                options.inlineResolver = InlineMethodResolver.createInlineMethodResolver(
-                    ((DexBackedOdexFile) dexFile).getOdexVersion());
+            // Decode the dex files into separate folders.
+            for (Map.Entry<Integer, DexBackedDexFile> entry : dexFiles.entrySet()) {
+                int dexNum = entry.getKey();
+                DexBackedDexFile dexFile = entry.getValue();
+
+                if (dexFile.supportsOptimizedOpcodes()) {
+                    throw new AndrolibException("Cannot disassemble an odex file without deodexing it: " + dexName);
+                }
+
+                String dirName = "smali";
+                if (dexNum > 1 || !dexName.equals("classes.dex")) {
+                    dirName += "_" + dexName.substring(0, dexName.lastIndexOf('.')).replace('/', '@');
+                    if (dexNum > 1) {
+                        dirName += dexNum;
+                    }
+                }
+
+                decodeFile(dexFile, new File(outDir, dirName));
             }
 
-            Baksmali.disassembleDexFile(dexFile, outDir, jobs, options);
-
-            mInferredApiLevel = dexFile.getOpcodes().api;
+            mDexFiles.add(dexName);
         } catch (IOException ex) {
-            throw new AndrolibException("Could not baksmali file: " + mDexName, ex);
+            throw new AndrolibException("Could not baksmali file: " + dexName, ex);
         }
+    }
+
+    private void decodeFile(DexBackedDexFile dexFile, File smaliDir) {
+        int jobs = Math.min(Runtime.getRuntime().availableProcessors(), 6);
+
+        BaksmaliOptions options = new BaksmaliOptions();
+        options.parameterRegisters = true;
+        options.localsDirective = true;
+        options.sequentialLabels = true;
+        options.debugInfo = mDebugMode;
+        options.codeOffsets = false;
+        options.accessorComments = false;
+        options.allowOdex = false;
+        options.deodex = false;
+        options.implicitReferences = false;
+        options.normalizeVirtualMethods = false;
+        options.registerInfo = 0;
+
+        if (dexFile instanceof DexBackedOdexFile) {
+            options.inlineResolver = InlineMethodResolver.createInlineMethodResolver(
+                ((DexBackedOdexFile) dexFile).getOdexVersion());
+        }
+
+        OS.mkdir(smaliDir);
+        Baksmali.disassembleDexFile(dexFile, smaliDir, jobs, options);
+
+        int apiLevel = dexFile.getOpcodes().api;
+        mInferredApiLevel.updateAndGet(cur -> (cur == 0 || cur > apiLevel) ? apiLevel : cur);
     }
 }
