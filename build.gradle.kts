@@ -65,14 +65,6 @@ plugins {
 allprojects {
     repositories {
         mavenCentral()
-        // Obtain baksmali/smali from source builds - https://github.com/iBotPeaches/smali
-        // Remove when official smali releases come out again.
-        maven {
-            url = uri("https://jitpack.io")
-            content {
-                includeGroup("com.github.iBotPeaches.smali")
-            }
-        }
         google()
     }
 }
@@ -140,7 +132,7 @@ subprojects {
     }
 
     val mavenProjects = arrayOf(
-        "brut.j.common", "brut.j.util", "brut.j.dir", "brut.j.xml", "brut.j.yaml",
+        "brut.j.common", "brut.j.util", "brut.j.xml", "brut.j.yaml", "brut.j.zip",
         "apktool-lib"
     )
 
